@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 from __future__ import print_function
 import pickle
 from googleapiclient.discovery import build
@@ -70,6 +71,7 @@ def main():
             creds = pickle.load(token)
     # If there are no (valid) credentials available, let the user log in.
     if not creds or not creds.valid:
+        print('No OAuth tokens found, starting auth');
         if creds and creds.expired and creds.refresh_token:
             creds.refresh(Request())
         else:
@@ -80,7 +82,7 @@ def main():
         with open(credentials_token_path, 'wb') as token:
             pickle.dump(creds, token)
 
-    service = build('photoslibrary', 'v1', credentials=creds)
+    service = build('photoslibrary', 'v1', credentials=creds, static_discovery=False)
     # Call the Photo v1 API
     results = service.albums().list(
         pageSize=10, fields="nextPageToken,albums(id,title)").execute()
