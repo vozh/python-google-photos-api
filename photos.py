@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 from __future__ import print_function
 import pickle
 from googleapiclient.discovery import build
@@ -13,7 +14,6 @@ from datetime import datetime
 # If modifying these scopes, delete the file token.pickle.
 SCOPES = ['https://www.googleapis.com/auth/photoslibrary.readonly',
           'https://www.googleapis.com/auth/photoslibrary.sharing']
-
 
 def get_file_list_in_directory_by_extension(mypath, ext):
     return [os.path.join(mypath, f) for f in os.listdir(mypath) if os.path.isfile(os.path.join(mypath, f)) and f.endswith(ext)]
@@ -52,12 +52,15 @@ def move_one_file_to_cloud(creds, albumId, file_to_upload_full_path):
         }
 
     response = requests.post('https://photoslibrary.googleapis.com/v1/mediaItems:batchCreate', headers=headers, json=reqbody)
-    response.raise_for_status()
-    if os.path.exists(file_to_upload_full_path):
+    uploadErr = response.raise_for_status()
+    if response.ok:
+        print('Successfully uploaded {}'.format(file_to_upload_full_path))
+    elif uploadErr:
+        print('Failed to upload {} error: {}'.format(file_to_upload_full_path, uploadErr))
+    if response.ok and os.path.exists(file_to_upload_full_path):
         os.remove(file_to_upload_full_path)
 
-
-def main():
+def auth():
     script_workdir = os.path.dirname(os.path.realpath(__file__))
     credentials_token_path = os.path.join(script_workdir, 'token.pickle')
     credentials_json_path = os.path.join(script_workdir, 'credentials.json') 
@@ -70,6 +73,7 @@ def main():
             creds = pickle.load(token)
     # If there are no (valid) credentials available, let the user log in.
     if not creds or not creds.valid:
+        print('No OAuth tokens found, starting auth');
         if creds and creds.expired and creds.refresh_token:
             creds.refresh(Request())
         else:
@@ -79,11 +83,17 @@ def main():
         # Save the credentials for the next run
         with open(credentials_token_path, 'wb') as token:
             pickle.dump(creds, token)
+    return creds
 
-    service = build('photoslibrary', 'v1', credentials=creds)
+def main(creds):
+    script_workdir = os.path.dirname(os.path.realpath(__file__))
+    service = build('photoslibrary', 'v1', credentials=creds, static_discovery=False)
     # Call the Photo v1 API
     results = service.albums().list(
         pageSize=10, fields="nextPageToken,albums(id,title)").execute()
+    albumName = 'helloworld'
+    if len(sys.argv) > 2:
+        albumName = sys.argv[2]
     albumId = None
     items = results.get('albums', [])
     if not items:
@@ -92,11 +102,12 @@ def main():
         print('Albums:')
         for item in items:
             print('{0} ({1})'.format(item['title'].encode('utf8'), item['id']))
-            if item['title'] == 'helloworld':
+            if item['title'] == albumName:
                 albumId = item['id']
     
     if albumId == None:
-        response_create_album = service.albums().create(body={'album':{'title':'helloworld', 'isWriteable': 'true'}}).execute()
+        print('Album not found, creating a new one')
+        response_create_album = service.albums().create(body={'album':{'title':albumName, 'isWriteable': 'true'}}).execute()
         albumId = response_create_album['id']
         headers = {
         'Content-Type': "application/json",
@@ -110,12 +121,16 @@ def main():
         }
         response = requests.post('https://photoslibrary.googleapis.com/v1/albums/{}:share'.format(response_create_album['id']), headers=headers, json=reqbody)
         response.raise_for_status()
+
+    print('Uploading to album with id ' + albumId)
         
     if len(sys.argv) > 1:
         """
         wait a minute if the file hasn't been created yet
         """
         file_to_upload_full_path = sys.argv[1]
+        if not os.path.isfile(file_to_upload_full_path):
+            print('File not found, waiting for file')
         start = time.time()
         while time.time() - start < 60:
             if os.path.isfile(file_to_upload_full_path):
@@ -141,12 +156,14 @@ def main():
 
 
 if __name__ == '__main__':
+    cred = None
     file_lock_path = "//tmp//photos.py.lock"
     lock = filelock.FileLock(file_lock_path)
     try:
         with lock.acquire(timeout=1):
-            main()
+            cred = auth()
             lock.release()
+        main(cred)
     except filelock.Timeout:
         print('{} is locked. Is another instance running?'.format(file_lock_path))
         pass
